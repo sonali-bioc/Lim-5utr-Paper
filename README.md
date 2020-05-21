@@ -2,6 +2,10 @@
 This repository contains R scripts used for our publication "Multiplexed functional genomic analysis of somatic 5’ untranslated region mutations across the spectrum of human prostate cancer "
 
 
+## References
+1) R Core Team (2018). R: A language and environment for statistical computing. R Foundation for Statistical Computing, Vienna, Austria. URL https://www.R-project.org/.
+2) Fraser, M., Sabelnykova, V., Yamaguchi, T. et al. Genomic hallmarks of localized, non-indolent prostate cancer. Nature 541, 359–364 (2017). https://doi.org/10.1038/nature20788
+
 ## Tools used for analysis 
 
 All our analysis is done in R using the following  R/Biocondcutor packages.
