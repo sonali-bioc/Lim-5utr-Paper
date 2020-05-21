@@ -1,0 +1,314 @@
+---
+title: "5'UTR mutation analysis"
+author: "Sonali Arora"
+date: "May 21, 2020"
+output: 
+  html_document:
+    toc: true
+    theme: united
+---
+
+In this vignette, we recreate figures related to the 5' utr mutation analysis.
+
+## Fig 5a
+
+```{r}
+
+rm(list=ls())
+
+suppressPackageStartupMessages({ 
+  library(GenomicAlignments)
+  library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+  library(org.Hs.eg.db)
+  library(ggplot2)
+  library(VennDiagram)
+})
+
+bigdat = read.delim("Union_snv_calls_only_UTR5.txt",
+                    header=T, stringsAsFactors = FALSE)
+gene_table = as.data.frame(table(unlist(strsplit(bigdat[,7],","))))
+gene_table = gene_table[order(gene_table[,2], decreasing=TRUE), ]
+gene = as.character(gene_table[,1])
+gene_mat = matrix(ncol=3, nrow = length(gene))
+
+for(i in 1:length(gene)){
+  x = gene[i]
+  idx = grep(paste0("^",x,"$|^",x,",|,",x,"$|,",x,","), bigdat[,7])
+  
+  if(length(idx)!=gene_table[i,2]){
+    message(x)
+  }
+  
+  sm = bigdat[idx, "sampleName"]  
+  temp_samples = unique(unlist(lapply(sm, function(x) unlist(strsplit(x, ", |,")))))
+  names(temp_samples)=NULL
+  gene_mat[i,1] = x
+  gene_mat[i,2] = paste0(temp_samples, collapse = ", ")
+  gene_mat[i,3] = length(temp_samples)
+}
+colnames(gene_mat) = c("geneName", "sampleNames","Patient_Freq")
+
+mut_loc_met = apply(gene_mat, 1, function(x){
+  sm = unlist(strsplit(x["sampleNames"], ", "))
+  localized= length(grep("^CPCG*|^hg19.p*", sm))
+  metastatic = length(sm) - localized
+  c(localized= localized, metastatic =metastatic )
+})
+mut_loc_met = t(mut_loc_met)
+gene_mat = cbind(gene_mat, mut_loc_met)
+gene_mat = gene_mat[which(gene_mat[,2]!=""), ]
+
+met_gene = gene_mat[which(as.numeric(gene_mat[,"metastatic"])!=0) ,1 ]
+loc_gene = gene_mat[which(as.numeric(gene_mat[,"localized"])!=0) , 1]
+common_idx = which(as.numeric(gene_mat[,"localized"])!=0  & 
+                     as.numeric(gene_mat[,"metastatic"])!=0  )
+common_gene = gene_mat[common_idx,1]
+
+shared_genes = intersect(loc_gene[,1], met_gene[,1])
+
+length(shared_genes) # 126
+length(met_gene) # [1] 1102
+length(loc_gene) # [1] 902
+length(common_gene) # [1] 126
+
+venn.diagram(x=list('localised'= loc_gene, 'metastatic'= met_gene), 
+             filename="fig5a.png")
+
+```
+
+
+## Supplemental Figure 6a - TSS plot 
+
+```{r}
+
+txdb = TxDb.Hsapiens.UCSC.hg19.knownGene
+seqlevelsStyle(txdb) = "NCBI"
+gn <- sort(genes(txdb))
+gn$gene_name = mapIds(org.Hs.eg.db, keys = gn$gene_id, column="SYMBOL", 
+                      keytype="ENTREZID", multivals="first")
+
+mutated_genes = unique(c(met_gene, loc_gene))
+transcripts <- transcriptsBy(txdb, by="gene")
+ids = gn[na.omit(match(mutated_genes,gn$gene_name) ), ]$gene_id
+transcripts = transcripts[ match(ids, names(transcripts)), ]
+tss <- resize(transcripts, width=1, fix='start')
+
+ranges = unlist(tss) # take 200bp around the TSS site
+start(ranges) = start(ranges)-200
+end(ranges) = end(ranges)+200
+ranges= ranges[match( unique(start(ranges)), start(ranges)) , ]
+
+bamfls = list.files(pattern="*.bam$")
+ranges_no = length(ranges)
+ranges = keepSeqlevels(ranges, c(1:22), pruning.mode= "coarse")
+txdb = keepStandardChromosomes(txdb, pruning.mode="coarse")
+which <- ranges  
+param <- ScanBamParam(flag=scanBamFlag(isDuplicate=FALSE, isSecondaryAlignment=FALSE), 
+                      which=which) 
+result = lapply(bamfls, function(x){
+  bf = BamFile(x)
+  cvg = coverage(readGAlignments(bf, param=param))
+  test2 = sapply(ranges[1:ranges_no, ], function(z) {
+    ans = as.numeric(cvg[z,][[1]])
+    if(as.character(strand(z))=="-"){
+      ans = ans[length(ans):1]
+    }
+    ans
+  })
+  test2 = t(test2)
+  test = colSums(test2)
+  test
+})
+
+pdf("TSS_pileup_avg_for_bam_files_utr5.pdf")
+plot(apply(result, 2, median), type="l",  main = "TSS pileup")
+abline(v=201, col="red")
+dev.off()
+
+```
+
+
+## Fig 2b
+
+```{r}
+rm(list=ls())
+library(ggplot2)
+utr5 = read.delim("gsea_only_5utr.txt", header=T, stringsAsFactors = FALSE) 
+shared = read.delim( "gsea_sshared_5utr_cds.txt", header=T, stringsAsFactors = FALSE)
+cds=  read.delim("gsea_only_cds.txt", header=T, stringsAsFactors = FALSE)
+
+cds = cds[-c(6,8), ] #(6) Degradation of the extracellular matrix, (8) ECM proteoglycans
+shared = shared[-10, ] # (10) Purine metabolism
+utr5 = utr5[-c(7,13), ] # (7)Cell Cycle, Mitotic (13)TRIF(TICAM1)-mediated TLR4 signaling
+
+utr5$group = rep("5' UTR only", nrow(utr5))
+shared$group = rep("5'UTR & CDS overlap", nrow(shared))
+cds$group = rep("CDS only", nrow(cds))
+
+df = rbind(utr5, shared, cds)
+
+df = df[, c("Description", "k.K", "FDR.q.value", "group")]
+colnames(df) =c("Description","GeneRatio", "p.adjust","group") 
+df$p.adjust = -log10( df$p.adjust )
+
+df$Description[grep("Cytokine Signaling in Immune system", df$Description)] = "Cytokine signaling in immune system"
+df$Description[grep("Gene expression \\(Transcription\\)" , df$Description)] = "Gene expression (transcription)"
+df$Description[grep("Generic Transcription Pathway"  , df$Description)] = "Gene transcription pathway"
+df$Description[grep("Developmental Biology"  , df$Description)] = "Development biology"
+df$Description[grep("Cell Cycle"  , df$Description)] = "Cell cycle"
+df$Description[grep("Toll Like Receptor 4 \\(TLR4\\) Cascade"  , df$Description)] = "Toll like receptor 4 (TLR4) cascade"
+df$Description[grep("Signaling by Receptor Tyrosine Kinases"  , df$Description)] = "Signaling by receptor tyrosine kinases"
+
+levs = unique(df$Description)
+df$Description <- factor(df$Description, levels=levs)
+
+p2b = ggplot(df, aes(x=group, y=Description, size=GeneRatio, color=p.adjust)) +
+  geom_point(stroke=5) +
+  scale_color_gradient(low="darkorange", high="darkcyan") +
+  ylab("") + xlab("") +
+  labs(size="Gene Ratio", colour="-log10(p.adj)")
+
+pdf("Fig_2b.pdf", width=15, height=12)
+print(p2b)
+dev.off()
+
+```
+
+
+## Fig 3d 
+
+```{r}
+
+rm(list=ls())
+library(ggplot2)
+tbl = read.delim("gsea_list_all_fdr_0.1.txt", header=T, stringsAsFactors=FALSE)
+tbl = tbl[, c("Gene.Set.Name", "k.K", "FDR.q.value")]
+colnames(tbl) =c("Description","GeneRatio", "p.adjust") 
+tbl$p.adjust = -log10( tbl$p.adjust )
+
+tbl$Description = gsub("KEGG_", " ", tbl$Description)
+tbl$Description = gsub("_", " ", tbl$Description)
+tbl$Description = c("Pathways in cancer", 
+                    "Toll like receptor signaling pathway", 
+                    "B cell receptor signaling pathway", 
+                    "Apoptosis", 
+                    "T cell receptor signaling pathway", 
+                    "MAPK signaling pathway", 
+                    "Prostate cancer")
+
+tbl$Description <- factor(tbl$Description, levels=rev(unique(tbl$Description)))
+
+p3d = ggplot(tbl, aes(x=p.adjust, y=Description, size=GeneRatio, color=p.adjust)) +
+  geom_point()  + 
+  scale_color_gradient(low="darkorange", high="darkcyan") +
+  ylab("") + xlab("-log10(p.adjust)") +
+  ggtitle("")
+
+pdf("Fig_3d.pdf", width =12)
+print(p3d)
+dev.off()
+
+```
+
+
+## Fig 5b 
+
+```{r}
+rm(list=ls())
+library(ggplot2)
+
+tbl_loc = read.delim("gsea_localized_kegg.txt", header=T, stringsAsFactors=FALSE)
+tbl_loc = tbl_loc[-c(7,9), ]
+tbl_loc = tbl_loc[, c("Description", "k.K", "minus.log.FDR")]
+colnames(tbl_loc)[2:3] =c("GeneRatio", "p.adjust") 
+tbl_loc$Description <- factor(tbl_loc$Description, levels=rev(unique(tbl_loc$Description)))
+
+tbl_met = read.delim("gsea_met_kegg.txt", header=T, stringsAsFactors=FALSE)
+tbl_met = tbl_met[-c(5), ]
+tbl_met = tbl_met[, c("Description", "k.K", "minus.log.FDR")]
+colnames(tbl_met)[2:3] =c("GeneRatio", "p.adjust") 
+tbl_met$Description <- factor(tbl_met$Description, levels=rev(unique(tbl_met$Description)))
+
+p5b_loc = ggplot(tbl_loc, aes(x=p.adjust, y=Description, size=GeneRatio, color=p.adjust)) +
+  geom_point() +
+  scale_color_gradient(low="darkorange", high="darkcyan") +
+  ylab("") + xlab("-log10(p.adjust)") +
+  ggtitle("") 
+
+p5b_met = ggplot(tbl_met, aes(x=p.adjust, y=Description, size=GeneRatio, color=p.adjust)) +
+  geom_point() +
+  scale_color_gradient(low="darkorange", high="darkcyan") +
+  ylab("") + xlab("-log10(p.adjust)") +
+  ggtitle("") 
+
+pdf("Fig_5b.pdf", width =12)
+print(p5b_loc)
+print(p5b_met)
+dev.off()
+
+```
+
+
+
+## Supplemental Figure 4c 
+
+```{r}
+rm(list=ls())
+library(ggplot2)
+
+df <- read.delim("Union_snv_calls_only_UTR5_patientwise.txt", 
+  header=T, stringsAsFactors=FALSE)
+
+## Make boxplots for tumor vaf and normal vaf reads. 
+tumor_vaf <- data.frame(df[, "tumor_vaf"])
+normal_vaf <- data.frame(df[, "normal_vaf"])
+tumor_vaf$group <- "TUMOR_VAF"
+normal_vaf$group <- "NORMAL_VAF"
+colnames(tumor_vaf)[1]=colnames(normal_vaf)[1]="value"
+
+ggdf <- rbind(tumor_vaf, normal_vaf)
+ggdf$group = factor(ggdf$group, levels = c("NORMAL_VAF", "TUMOR_VAF"))
+
+p1 <- ggplot(ggdf, aes(x=group, y=value, color=group, ))  +
+   geom_boxplot() +  xlab("") + ggtitle("") +
+  ylab("Variant Allele Frequency in\n Tumor and Matched Normal") + theme_sa +
+  scale_color_manual(labels = c("NORMAL_VAF", "TUMOR_VAF"), 
+                    values = c("gray48", "deeppink")) 
+
+pdf("supp_fig_VAF.pdf", width=8, height =10)
+print(p1)
+dev.off()
+
+## Make boxplots for tumor ref and normal alt reads. 
+tumor_ref <- data.frame(df[, "tumor_ref_reads"])
+normal_ref <- data.frame(df[, "normal_ref_reads"])
+tumor_alt <- data.frame(df[, "tumor_alt_reads"])
+normal_alt <- data.frame(df[, "normal_alt_reads"])
+
+tumor_ref$group <- "TUMOR_REF"
+normal_ref$group <- "NORMAL_REF"
+tumor_alt$group <- "TUMOR_ALT"
+normal_alt$group <- "NORMAL_ALT"
+
+colnames(tumor_ref)[1]=colnames(normal_ref)[1]= colnames(tumor_alt)[1]=colnames(normal_alt)[1]= "value"
+ggdf2 <- rbind(tumor_ref, normal_ref, tumor_alt, normal_alt)
+ggdf2[ which(ggdf2$value > 300), ]
+ggdf2[ which(ggdf2$value > 300), 1] = 300
+
+ggdf2$group <- factor(ggdf2$group, levels=c("NORMAL_REF", "NORMAL_ALT", 
+                                      "TUMOR_REF", "TUMOR_ALT"))
+p2 <- ggplot(ggdf2, aes(x=group, y=value, color=group))  +
+  geom_boxplot() +  ggtitle("") +  xlab("") + 
+  ylab("Ref and Alt Allele Counts in\n Tumor and Matched Normal")+ 
+  scale_color_manual(values=c("gray48", "deeppink", "gray48", "deeppink")) 
+
+pdf("supp_fig_ref_alt_reads.pdf", width=15, height =10)
+print(p2)
+dev.off()
+
+
+```
+
+
+
+

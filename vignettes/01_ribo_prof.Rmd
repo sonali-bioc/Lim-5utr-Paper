@@ -1,0 +1,177 @@
+---
+title: "Ribosome Profiling Analysis"
+author: "Sonali Arora"
+date: "May 21, 2020"
+output: 
+  html_document:
+    toc: true
+    theme: united
+---
+
+In this vignette , we use [xtail](https://github.com/xryanglab/xtail) and [DESeq2](https://www.bioconductor.org/packages/release/bioc/html/DESeq2.html) to find transcriptionally and translationally regulated genes. 
+
+```{r}
+rm(list=ls())
+
+library(DESeq2)
+
+raw_data = read.delim("ribosome_profiling_raw_counts.txt", header=T, 
+                 stringsAsFactors = FALSE, row.names=1)
+coldata = data.frame(
+  sampleName = colnames(raw_data),
+  sampleType = rep(c("RP", "RNA"), 15), 
+  sampleGroup = c(rep("WT", 10),  rep("Lucap78", 4), 
+                  rep("Lucap147", 4), rep("Lucap81", 4),  
+                  rep("Lucap92", 4), rep("Lucap145", 4)) )
+
+
+rownames(coldata) = colnames(raw_data)
+dds <- DESeqDataSetFromMatrix(countData = raw_data, 
+                              colData = coldata, design = ~1)
+norm_data <- assay(rlog(dds))
+
+# Make dendrogram from ribosome bound samples
+rp_idx = which(coldata$sampleType=="RP")
+rp_coldata = coldata[rp_idx, ]
+rp_mat = norm_data[, rp_idx]
+
+sampleDists <- dist( t( rp_mat ) )
+hc = hclust(sampleDists)
+plot(hc, main = paste0("Dendrogram : RP sample"))
+
+# Make dendrogram from total RNA samples
+rna_idx = which(coldata$sampleType=="RNA")
+rna_coldata = coldata[rna_idx, ]
+rna_mat = norm_data[, rna_idx]
+
+sampleDists_rna <- dist( t( rna_mat ) )
+hc_rna = hclust(sampleDists_rna)
+plot(hc_rna, main = paste0("Dendrogram totalRNA samples"))
+
+lucap_lst = c("Lucap78", "Lucap81", "Lucap92", 
+              "Lucap145", "Lucap147")
+
+# xtail analysis to find translationally regulated genes  
+lapply(lucap_lst, function(lucap){
+  tag = paste0(lucap, "_vs_5wt")
+  
+  wt_idx =grep("WT", coldata[,3])
+  lucap_idx = grep(lucap, coldata[,3])
+  temp_coldata = coldata[c(wt_idx, lucap_idx), ]
+  data = rraw_data[, c(wt_idx, lucap_idx)]
+  
+  rp.idx = grep("RP", temp_coldata[,2] )
+  test.rp = data[, rp.idx]
+  
+  rna.idx = grep("RNA", temp_coldata[,2])
+  test.rna = data[, rna.idx]
+  
+  colnames(test.rp) = c(paste0("control", 1:5), paste0("treatment", 1:2))
+  colnames(test.rna) = colnames(test.rp)
+  condition  <- c(rep("control", 5), rep("treatment",2 ))
+  test.results <- xtail(test.rna,test.rp,condition,
+                        baseLevel="control", bins=1000)
+  res = resultsTable(test.results)
+  res$FDR_v2 = p.adjust(res$pvalue_v2, method="BH")
+  res = res[, c("log2FC_TE_v2", "pvalue_v2", "FDR_v2") ]
+  colnames(res)[1:3] = c("log2FoldChange", "pvalue", "padj")
+  
+  up_idx = which( res[,"log2FoldChange"] >1 & res[, "padj"]< 0.05)
+  down_idx = which( res[,"log2FoldChange"] < -1 & res[, "padj"]< 0.05)
+ 
+  res = cbind(gene = rownames(res), res)
+  up_genes = res[up_idx, ]
+  down_genes = res[down_idx, ]
+
+  write.table(res, paste0("all_genes_XTAIL_results_",lucap,"_vs_5wt.txt"), 
+    col.names = TRUE, sep="\t", row.names = FALSE, quote=FALSE)
+  
+})
+
+
+# DESeq2 analysis to find transcriptionally regulated analysis.
+rna_idx = which(coldata$sampleType=="RNA")
+rna_coldata = coldata[rna_idx, ]
+rna_mat = raw_data[, rna_idx]
+
+lapply(lucap_lst, function(lucap){
+  keep_idx = grep(paste0(lucap, "|WT"), rna_coldata[,3])
+  data = rna_mat[ ,keep_idx]
+  temp_coldata = rna_coldata[keep_idx, ]
+  
+  idx1= which(rowSums(data)==0) # pre-filtering genes which have 0 in all samples
+  idx2 = which(rowSums(data[,1:2]) <=5)# pre-filtering genes which have 0 in all 5 wt samples.
+  idx = unique(c(idx1, idx2))
+  data = data[-c(idx),]
+  
+  rownames(temp_coldata) = colnames(data)
+  dds_combined = DESeqDataSetFromMatrix(countData = data, 
+                                      colData = temp_coldata, 
+                                      design = ~sampleGroup)
+  dds_combined$sampleGroup = relevel(dds_combined$sampleGroup, "WT")
+  dds_combined <- DESeq(dds_combined)
+  
+  res <- results(dds_combined, alpha=.05, lfcThreshold=1)
+  res <- as.data.frame(res)
+  res = res[, c("log2FoldChange", "pvalue", "padj") ]
+  res = cbind( gene = rownames(res), res)
+  
+  up_idx = which( res[,"log2FoldChange"] >1 & res[, "padj"]< 0.05)
+  down_idx = which( res[,"log2FoldChange"] < -1 & res[, "padj"]< 0.05)
+  up_genes = res[up_idx, ]
+  down_genes= res[down_idx, ]
+  
+  write.table(res, paste0("all_genes_DESeq2_results_",lucap,"_vs_5wt.txt"), 
+    col.names = TRUE, sep="\t", row.names = FALSE, quote=FALSE)
+})
+
+
+```
+
+
+## Triplate Periodicity 
+
+To find triplate periodicity, we used a R/Bioconductor package [riboSeqR](http://bioconductor.org/packages/release/bioc/html/riboSeqR.html)
+Flat files were created using bowtie, psuedo code is provided for 1 sample. 
+
+```{}
+# bowtie ~/tools/human_rrna_hg38/hg38.rrna --un nonrRNA_sample1.fq -q sample1_trimmed.fq -p 8  > rRNA_sample1 
+# bowtie ~/tools/full_transcriptome_index/hg19_rna_index --un unaligned_sample1.fq -q nonrRNA_sample1.fq --al aligned_sample1.fq --suppress 1,6,7,8  -p 8 > sample1.flatfile
+```
+
+For each sample, we then read in obtained flat file, plotted the sum of alignments in each of the different frames. 
+Next, the reading frame was visualized for each sample. Finally we ploted the total alignment at the 5’ and 3’ ends of coding sequences for each sample.
+
+```{r}
+library(riboSeqR)
+files = list.files(pattern="*.flatfile")
+lapply(files, function(ribofiles){
+  fileName = gsub(".flatfile", "", ribofiles)
+  riboDat <- readRibodata(ribofiles, replicates=x)
+  
+  png(file=paste0("dist_of_length",fileName,".png"))
+  lengthDist(riboDat, main="Distribution of lengths in Ribosomal Data")
+  dev.off()
+  
+  # frame counting 
+  fCs <- frameCounting(riboDat, fastaCDS_renamed, lengths=16:42)
+  fS <- readingFrame(rc=fCs, lengths=22:37)
+  png(file=paste0("plotfs_",fileName,".png"))
+  plotFS(fS)
+  dev.off()
+  
+  ## find the maximum 
+  idx <- which.max(rowSums(fS))
+  len = as.numeric(names(which.max(fS[idx,])))
+  ffCs <- filterHits(fCs, fS = fS, lengths = len, frames = 0,
+                     hitMean = 50, unqhitMean = 10)   
+  
+  pdf(file=paste0("plot_cds1_",fileName,".pdf"))
+  p1 = lapply(c(28:33), funtion(len){
+      plotCDS(coordinates = ffCs@CDS, riboDat = riboDat,
+          lengths = len, max5p = 400, main = paste0(len, "nt"), min5p = -100)
+  })
+  dev.off()
+})
+```
+
