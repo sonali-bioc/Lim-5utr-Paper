@@ -1,6 +1,8 @@
 # Introduction
 This repository contains R scripts used for our publication "Multiplexed functional genomic analysis of somatic 5’ untranslated region mutations across the spectrum of human prostate cancer "
 
+[![DOI](https://zenodo.org/badge/265941455.svg)](https://zenodo.org/badge/latestdoi/265941455)
+
 
 ## References
 1) R Core Team (2018). R: A language and environment for statistical computing. R Foundation for Statistical Computing, Vienna, Austria. URL https://www.R-project.org/.
